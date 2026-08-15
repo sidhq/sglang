@@ -526,6 +526,38 @@ class MambaComponent(TreeComponent):
         token_ids_len: int,
         is_finished: bool,
     ) -> Optional[int]:
+        # --- temporary instrumentation (env-gated, not for PR) -------------
+        import os as _os
+        _dump_dir = _os.environ.get("SGLANG_MAMBA_DUMP_DIR")
+        if _dump_dir:
+            try:
+                import time as _time
+                import torch as _torch
+                _pool = self.cache.req_to_token_pool.mamba_pool.mamba_cache
+                _live = int(req.mamba_pool_idx)
+                _keep = getattr(req, "mamba_last_track_idx", None)
+                _ckpt = None
+                if req.mamba_ping_pong_track_buffer is not None and _keep is not None:
+                    _ckpt = int(req.mamba_ping_pong_track_buffer[_keep].item())
+                _rec = {
+                    "rid": req.rid,
+                    "total_len": len(req.origin_input_ids) + len(req.output_ids),
+                    "mamba_last_track_seqlen": req.mamba_last_track_seqlen,
+                    "live_slot": _live,
+                    "ckpt_slot": _ckpt,
+                    "temporal_shape": tuple(_pool.temporal.shape),
+                    "live_temporal": _pool.temporal[:, _live].detach().to("cpu", _torch.float32),
+                    "live_conv": [c[:, _live].detach().to("cpu", _torch.float32) for c in _pool.conv],
+                }
+                if _ckpt is not None and _ckpt >= 0:
+                    _rec["ckpt_temporal"] = _pool.temporal[:, _ckpt].detach().to("cpu", _torch.float32)
+                    _rec["ckpt_conv"] = [c[:, _ckpt].detach().to("cpu", _torch.float32) for c in _pool.conv]
+                _torch.save(_rec, "{}/mamba_dump_{}_{}.pt".format(_dump_dir, req.rid[:8], int(_time.time() * 1000)))
+                print("[MDUMP] rid={} len={} B={} live={} ckpt={}".format(
+                    req.rid[:8], _rec["total_len"], _rec["mamba_last_track_seqlen"], _live, _ckpt), flush=True)
+            except Exception as _e:
+                print("[MDUMP] FAILED: {!r}".format(_e), flush=True)
+        # -------------------------------------------------------------------
         if self.cache.enable_mamba_extra_buffer:
             cache_len = req.mamba_last_track_seqlen
         else:
