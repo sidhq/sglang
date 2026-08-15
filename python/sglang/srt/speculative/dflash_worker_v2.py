@@ -1325,15 +1325,30 @@ class DFlashWorkerV2(BaseSpecWorker):
 
         last_correct_step_indices = commit_lens.to(torch.int64) - 1
         mamba_steps_to_track = None
+        import os as _os
+        _dbg = _os.environ.get("SGLANG_MAMBA_DUMP_DIR") is not None
+        if _dbg:
+            print("[MSPEC] track_indices_none={} pre={} post={}".format(
+                batch.mamba_track_indices is None,
+                seq_lens_pre_verify.tolist(), batch.seq_lens.tolist()), flush=True)
 
         if batch.mamba_track_indices is not None:
             mamba_track_interval = get_exec().mamba.mamba_track_interval
+            # batch.seq_lens is not yet advanced past this verify step here, so
+            # comparing it against seq_lens_pre_verify never detects a crossing
+            # (both are the pre-commit lengths) and the boundary snapshot is
+            # silently never scattered. Derive the post-commit lengths from the
+            # accepted counts instead, mirroring the scheduler-side check in
+            # _mamba_check_track_boundary (cur - prev == num_correct_drafts + 1).
+            seq_lens_post_verify = seq_lens_pre_verify + commit_lens.to(
+                seq_lens_pre_verify.dtype
+            )
             to_track_mask = (
                 seq_lens_pre_verify // mamba_track_interval
-                != batch.seq_lens // mamba_track_interval
+                != seq_lens_post_verify // mamba_track_interval
             )
             tracking_point = (
-                batch.seq_lens // mamba_track_interval * mamba_track_interval
+                seq_lens_post_verify // mamba_track_interval * mamba_track_interval
             )
             to_track_ith = torch.clamp(tracking_point - seq_lens_pre_verify - 1, min=0)
             can_track_mask = to_track_mask & (
@@ -1345,6 +1360,9 @@ class DFlashWorkerV2(BaseSpecWorker):
                 torch.full_like(to_track_ith, -1, dtype=torch.int64),
             )
 
+        if _dbg and mamba_steps_to_track is not None:
+            print("[MSPEC] steps_to_track={} track_indices={}".format(
+                mamba_steps_to_track.tolist(), batch.mamba_track_indices.tolist()), flush=True)
         model_runner = self.target_worker.model_runner
         if hasattr(attn_backend, "update_mamba_state_after_mtp_verify"):
             attn_backend.update_mamba_state_after_mtp_verify(
