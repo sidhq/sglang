@@ -346,7 +346,15 @@ def chunk_gated_delta_rule_fwd_h(
         )
     assert K <= 256, "current kernel does not support head dimension larger than 256."
 
-    h = k.new_empty(B, NT, H, V, K)
+    # Intermediate chunk states double as prefix-cache checkpoints: a tracked
+    # boundary state is scattered from `h` into the recurrent-state pool and
+    # later restored as the sequence's live state. It must therefore round-trip
+    # through the pool's dtype (initial_state comes from that pool). Allocating
+    # `h` in k's compute dtype silently rounds fp32 SSM states to bf16 at every
+    # donated checkpoint; the kernel accumulates in fp32 and stores at `h`'s
+    # dtype, so this costs no extra precision work.
+    h_dtype = initial_state.dtype if initial_state is not None else k.dtype
+    h = k.new_empty(B, NT, H, V, K, dtype=h_dtype)
 
     v_new = torch.empty_like(u) if save_new_value else None
 

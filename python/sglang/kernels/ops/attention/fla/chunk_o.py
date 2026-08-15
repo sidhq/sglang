@@ -90,8 +90,11 @@ def chunk_fwd_kernel_o(
         b_q = tl.load(p_q, boundary_check=(0, 1))
         # [BK, BT]
         b_k = tl.load(p_k, boundary_check=(0, 1))
-        # [BV, BK]
-        b_h = tl.load(p_h, boundary_check=(0, 1))
+        # [BV, BK]. h may be stored at higher precision than the compute dtype
+        # (it doubles as the prefix-cache state checkpoint, kept in the SSM
+        # pool dtype); cast to the q/k compute dtype so the tl.dot operands
+        # match and output numerics are unchanged.
+        b_h = tl.load(p_h, boundary_check=(0, 1)).to(b_q.dtype)
 
         # [BT, BK] @ [BK, BV] -> [BT, BV]
         b_o += tl.dot(b_q, tl.trans(b_h))
