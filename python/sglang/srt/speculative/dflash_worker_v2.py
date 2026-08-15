@@ -51,6 +51,7 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.spec_utils import (
+    prepare_mamba_track_for_verify,
     SIMULATE_ACC_LEN,
     SIMULATE_ACC_METHOD,
     SIMULATE_ACC_TOKEN_MODE,
@@ -1713,6 +1714,16 @@ class DFlashWorkerV2(BaseSpecWorker):
         grammar_tree = (
             GrammarTree.from_linear_chain(draft_tokens) if batch.has_grammar else None
         )
+
+        # Rebuild mamba track indices and clear stale extend-time track masks
+        # before TARGET_VERIFY, as dspark/ngram/eagle do. Without this,
+        # batch.mamba_track_indices is None in the post-verify commit, the
+        # boundary-crossing state scatter silently never writes the ping-pong
+        # track slot -- while the scheduler-side bookkeeping still advances
+        # mamba_last_track_seqlen and donates the never-written (zero) slot to
+        # the radix cache. Later requests then restore an all-zero recurrent
+        # state at that depth.
+        prepare_mamba_track_for_verify(batch)
 
         # --- 2) Target verify.
         # TARGET_VERIFY uses standard causal masking; custom masks are unnecessary here.
